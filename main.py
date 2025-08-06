@@ -1,54 +1,56 @@
 import os
-import logging
-import subprocess
 import re
-import tempfile
+import logging
+import asyncio
+import subprocess
 from datetime import datetime
 from moviepy.editor import VideoFileClip, CompositeVideoClip
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.constants import ChatAction
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from config import BOT_TOKEN, CHANNEL_USERNAME, WATERMARK_PATH, CAPTION_FILE, SHORT_DURATION, VERTICAL_RES
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def is_user_in_channel(update: Update, context: CallbackContext):
+async def is_user_in_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     try:
-        member = context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         return member.status in ['member', 'creator', 'administrator']
-    except:
+    except Exception as e:
+        logger.error(f"Error checking user in channel: {e}")
         return False
 
-def start(update: Update, context: CallbackContext):
-    if not is_user_in_channel(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_user_in_channel(update, context):
         keyboard = [[InlineKeyboardButton("🔗 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")]]
-        update.message.reply_text(
+        await update.message.reply_text(
             "🔒 Anda belum bergabung ke channel kami, harap bergabung terlebih dahulu.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-    update.message.reply_text("👋 Kirim link YouTube untuk saya potong menjadi Shorts!")
+    await update.message.reply_text("👋 Kirim link YouTube untuk saya potong menjadi Shorts!")
 
-def handle_message(update: Update, context: CallbackContext):
-    if not is_user_in_channel(update, context):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_user_in_channel(update, context):
         keyboard = [[InlineKeyboardButton("🔗 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")]]
-        update.message.reply_text(
+        await update.message.reply_text(
             "🔒 Anda belum bergabung ke channel kami, harap bergabung terlebih dahulu.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
     url = update.message.text.strip()
-    if not re.match(r'^https?://(www\.)?(youtube\.com|youtu\.be)/', url):
-        update.message.reply_text("❌ Link tidak valid. Kirim link video YouTube yang benar.")
+    if not re.match(r'^https?://(www\\.)?(youtube\\.com|youtu\\.be)/', url):
+        await update.message.reply_text("❌ Link tidak valid. Kirim link video YouTube yang benar.")
         return
 
-    context.bot.send_chat_action(update.effective_chat.id, 'typing')
-    context.application.create_task(process_video(update, context, url))
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    await process_video(update, context, url)
 
-async def process_video(update, context, url):
+async def process_video(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     chat_id = update.effective_chat.id
     message = await context.bot.send_message(chat_id, "⬇️ Sedang mendownload video...")
 
@@ -64,7 +66,7 @@ async def process_video(update, context, url):
         ]
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
-        await message.edit_text(f"❌ Gagal download video.")
+        await message.edit_text("❌ Gagal download video. Mungkin video perlu login. Coba pakai cookies.")
         return
 
     await message.edit_text("✅ Download selesai. Proses menjadi Shorts...")
@@ -76,10 +78,11 @@ async def process_video(update, context, url):
         if os.path.exists(output_filename):
             os.remove(output_filename)
 
-async def generate_shorts(filename, chat_id, context):
+async def generate_shorts(filename: str, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     clip = VideoFileClip(filename)
     total_duration = int(clip.duration)
     num_clips = max(1, total_duration // SHORT_DURATION)
+
     wm_clip = VideoFileClip(WATERMARK_PATH).resize(height=100).loop()
 
     for i in range(num_clips):
@@ -100,8 +103,8 @@ async def generate_shorts(filename, chat_id, context):
             caption = f.read()
 
         with open(output_name, "rb") as video_file:
-            context.bot.send_chat_action(chat_id, 'upload_video')
-            context.bot.send_video(chat_id, video=video_file, caption=caption)
+            await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_VIDEO)
+            await context.bot.send_video(chat_id, video=video_file, caption=caption)
 
         os.remove(output_name)
         short_clip.close()
@@ -110,12 +113,12 @@ async def generate_shorts(filename, chat_id, context):
     clip.close()
 
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    updater.start_polling()
-    updater.idle()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
