@@ -1,7 +1,9 @@
 import os
-import asyncio
 import logging
 import subprocess
+import re
+import tempfile
+from datetime import datetime
 from moviepy.editor import VideoFileClip, CompositeVideoClip
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
@@ -39,14 +41,21 @@ def handle_message(update: Update, context: CallbackContext):
         return
 
     url = update.message.text.strip()
-    asyncio.run(process_video(update, context, url))
+    if not re.match(r'^https?://(www\.)?(youtube\.com|youtu\.be)/', url):
+        update.message.reply_text("❌ Link tidak valid. Kirim link video YouTube yang benar.")
+        return
+
+    context.bot.send_chat_action(update.effective_chat.id, 'typing')
+    context.application.create_task(process_video(update, context, url))
 
 async def process_video(update, context, url):
     chat_id = update.effective_chat.id
-    msg = context.bot.send_message(chat_id, "⬇️ Mulai download video...")
+    message = await context.bot.send_message(chat_id, "⬇️ Sedang mendownload video...")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"video_{timestamp}.mp4"
 
     try:
-        output_filename = "downloaded_video.mp4"
         command = [
             "yt-dlp",
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
@@ -54,34 +63,49 @@ async def process_video(update, context, url):
             url
         ]
         subprocess.run(command, check=True)
-    except Exception as e:
-        msg.edit_text(f"Gagal download: {e}")
+    except subprocess.CalledProcessError as e:
+        await message.edit_text(f"❌ Gagal download video.")
         return
 
-    msg.edit_text("✅ Download selesai, mulai proses Shorts...")
-    await asyncio.sleep(1)
-    await generate_shorts(output_filename, chat_id, context)
-    os.remove(output_filename)
+    await message.edit_text("✅ Download selesai. Proses menjadi Shorts...")
+    try:
+        await generate_shorts(output_filename, chat_id, context)
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"❌ Gagal proses video: {e}")
+    finally:
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
 
 async def generate_shorts(filename, chat_id, context):
     clip = VideoFileClip(filename)
     total_duration = int(clip.duration)
-    num_clips = total_duration // SHORT_DURATION
-    wm_clip = VideoFileClip(WATERMARK_PATH).resize(height=100)
+    num_clips = max(1, total_duration // SHORT_DURATION)
+    wm_clip = VideoFileClip(WATERMARK_PATH).resize(height=100).loop()
 
     for i in range(num_clips):
         start = i * SHORT_DURATION
         end = start + SHORT_DURATION
-        short_clip = clip.subclip(start, end).resize(height=VERTICAL_RES[1])
+        short_clip = clip.subclip(start, min(end, total_duration)).resize(height=VERTICAL_RES[1])
         wm_position = ("center", VERTICAL_RES[1] - 200)
-        watermarked = CompositeVideoClip([short_clip, wm_clip.set_position(wm_position).set_duration(short_clip.duration)])
-        output_name = f"short_{i}.mp4"
+
+        watermarked = CompositeVideoClip([
+            short_clip,
+            wm_clip.set_position(wm_position).set_duration(short_clip.duration)
+        ])
+
+        output_name = f"short_{i}_{datetime.now().strftime('%H%M%S')}.mp4"
         watermarked.write_videofile(output_name, codec="libx264", audio_codec="aac", threads=4, logger=None)
 
         with open(CAPTION_FILE, "r", encoding="utf-8") as f:
             caption = f.read()
-        context.bot.send_video(chat_id, video=open(output_name, "rb"), caption=caption)
+
+        with open(output_name, "rb") as video_file:
+            context.bot.send_chat_action(chat_id, 'upload_video')
+            context.bot.send_video(chat_id, video=video_file, caption=caption)
+
         os.remove(output_name)
+        short_clip.close()
+        watermarked.close()
 
     clip.close()
 
