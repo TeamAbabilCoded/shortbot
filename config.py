@@ -1,0 +1,6 @@
+BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE'
+CHANNEL_USERNAME = '@AutoShortYouTubeID'
+WATERMARK_PATH = 'wm.gif'
+CAPTION_FILE = 'caption.txt'
+SHORT_DURATION = 60  # durasi dalam detik
+VERTICAL_RES = (720, 1280)
