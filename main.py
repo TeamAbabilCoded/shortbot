@@ -11,7 +11,7 @@ import logging
 # --- KONFIGURASI ---
 BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE'
 CHANNEL_USERNAME = '@AutoShortYouTubeID'
-WATERMARK_PATH = 'wm.gif'
+WATERMARK_PATH = 'wm.png'
 CAPTION_FILE = 'caption.txt'
 SHORT_DURATION = 60  # Durasi setiap klip
 VERTICAL_RES = (720, 1280)  # Resolusi vertikal
